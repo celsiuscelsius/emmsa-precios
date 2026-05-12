@@ -2,14 +2,25 @@ name: Scraper EMMSA Diario
 
 on:
   schedule:
-    # Ejecuta el script todos los días a las 12:00 PM UTC (7:00 AM hora de Perú)
-    - cron: '0 12 * * *'
+    # LUNES A SÁBADO — cada 1.5 horas de 6am a 6pm Lima (UTC-5)
+    - cron: '0 11 * * 1-6'    # 6:00 AM Lima
+    - cron: '30 12 * * 1-6'   # 7:30 AM Lima
+    - cron: '0 14 * * 1-6'    # 9:00 AM Lima
+    - cron: '30 15 * * 1-6'   # 10:30 AM Lima
+    - cron: '0 17 * * 1-6'    # 12:00 PM Lima
+    - cron: '30 18 * * 1-6'   # 1:30 PM Lima
+    - cron: '0 20 * * 1-6'    # 3:00 PM Lima
+    - cron: '30 21 * * 1-6'   # 4:30 PM Lima
+    - cron: '0 23 * * 1-6'    # 6:00 PM Lima
+    # DOMINGO — 3 intentos
+    - cron: '0 11 * * 0'      # 6:00 AM Lima
+    - cron: '0 19 * * 0'      # 2:00 PM Lima
+    - cron: '0 4 * * 1'       # 11:00 PM Lima del domingo (es lunes 4am UTC)
   workflow_dispatch:
 
 jobs:
   ejecutar-scraper:
     runs-on: ubuntu-latest
-
     steps:
     - name: 📥 Clonar el repositorio
       uses: actions/checkout@v4
