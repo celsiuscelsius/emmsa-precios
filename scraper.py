@@ -17,8 +17,12 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
 
 def scrape_emmsa():
     lima = pytz.timezone("America/Lima")
-    hoy = datetime.now(lima).strftime("%d/%m/%Y")
+    ahora = datetime.now(lima)
+    hoy = ahora.strftime("%d/%m/%Y")
+    # Nombre del archivo: YYYY-MM-DD.json (más fácil de ordenar)
+    nombre_archivo = ahora.strftime("%Y-%m-%d") + ".json"
     print(f"Fecha real de Lima: {hoy}")
+    print(f"Archivo a guardar: {nombre_archivo}")
 
     with sync_playwright() as p:
         headless = os.getenv("GITHUB_ACTIONS") == "true"
@@ -65,7 +69,6 @@ def scrape_emmsa():
                     precio_max = float(celdas[3].inner_text().strip().replace(",", "."))
                     precio_avg = round((precio_min + precio_max) / 2, 2)
 
-                    # Filtra filas que son solo números (paginación de EMMSA)
                     es_numero = nombre.replace('/', '').replace(' ', '').isdigit()
 
                     if nombre and not es_numero:
@@ -87,22 +90,33 @@ def scrape_emmsa():
 
     resultado = {"fecha": hoy, "productos": productos}
 
-    with open("precios.json", "w", encoding="utf-8") as f:
+    # Guarda localmente
+    with open(nombre_archivo, "w", encoding="utf-8") as f:
         json.dump(resultado, f, ensure_ascii=False, indent=2)
-    print(f"✓ {len(productos)} productos guardados localmente")
+    print(f"✓ {len(productos)} productos guardados localmente en {nombre_archivo}")
 
+    # Sube a Supabase con nombre de fecha (no sobreescribe días anteriores)
     print("Subiendo a Supabase...")
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-    with open("precios.json", "rb") as f:
+    with open(nombre_archivo, "rb") as f:
         supabase.storage.from_("precios").upload(
-            path="precios.json",
+            path=nombre_archivo,
             file=f,
             file_options={"content-type": "application/json", "upsert": "true"}
         )
 
-    print("✓ Subido a Supabase correctamente")
-    print(f"\nURL pública: {SUPABASE_URL}/storage/v1/object/public/precios/precios.json")
+    # También actualiza un archivo "latest.json" que siempre tiene el día actual
+    with open(nombre_archivo, "rb") as f:
+        supabase.storage.from_("precios").upload(
+            path="latest.json",
+            file=f,
+            file_options={"content-type": "application/json", "upsert": "true"}
+        )
+
+    print(f"✓ Subido correctamente como {nombre_archivo} y latest.json")
+    print(f"\nURL de hoy: {SUPABASE_URL}/storage/v1/object/public/precios/{nombre_archivo}")
+    print(f"URL latest: {SUPABASE_URL}/storage/v1/object/public/precios/latest.json")
 
     print("\nVista previa (primeros 5):")
     for prod in productos[:5]:
