@@ -16,7 +16,6 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     exit(1)
 
 def scrape_emmsa():
-    # Fecha real de Lima/Bogotá sin importar dónde corra el script
     lima = pytz.timezone("America/Lima")
     hoy = datetime.now(lima).strftime("%d/%m/%Y")
     print(f"Fecha real de Lima: {hoy}")
@@ -34,22 +33,14 @@ def scrape_emmsa():
 
         page.wait_for_selector("input[name='chkChanging']", timeout=20000)
 
-        # Lee qué fecha tiene la página por defecto
         fecha_pagina = page.input_value("input[name='txtfecha1']")
         print(f"Fecha que tenía la página: {fecha_pagina}")
 
-        # Corrige la fecha al día real de Lima
         page.fill("input[name='txtfecha1']", "")
         page.type("input[name='txtfecha1']", hoy)
         print(f"✓ Fecha corregida a: {hoy}")
 
-        # Verifica que quedó bien escrita
-        fecha_final = page.input_value("input[name='txtfecha1']")
-        print(f"Fecha en el campo ahora: {fecha_final}")
-
         page.wait_for_timeout(500)
-
-        # Marca Todos
         page.check("input[name='chkChanging']")
         print("✓ Checkbox 'Todos' marcado")
 
@@ -74,7 +65,10 @@ def scrape_emmsa():
                     precio_max = float(celdas[3].inner_text().strip().replace(",", "."))
                     precio_avg = round((precio_min + precio_max) / 2, 2)
 
-                    if nombre:
+                    # Filtra filas que son solo números (paginación de EMMSA)
+                    es_numero = nombre.replace('/', '').replace(' ', '').isdigit()
+
+                    if nombre and not es_numero:
                         productos.append({
                             "nombre":   nombre,
                             "variedad": variedad,
@@ -88,7 +82,7 @@ def scrape_emmsa():
         browser.close()
 
     if not productos:
-        print("⚠ No se encontraron productos. Puede que aún no haya datos para hoy.")
+        print("⚠ No se encontraron productos.")
         return
 
     resultado = {"fecha": hoy, "productos": productos}
