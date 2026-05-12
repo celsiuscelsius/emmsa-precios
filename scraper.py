@@ -60,31 +60,48 @@ def scrape_emmsa():
                 )
                 page = context.new_page()
 
+                # 1. Entrar a la página
                 page.goto(
                     "https://old.emmsa.com.pe/emmsa_spv/rpEstadistica/rpt_precios-diarios-web.php",
                     timeout=90000,
                     wait_until="domcontentloaded"
                 )
 
+                # --- PAUSA DE 10 SEGUNDOS AL ENTRAR ---
+                print("Esperando 10 segundos para que la web cargue completamente...")
+                page.wait_for_timeout(10000)
+
                 page.wait_for_selector("input[name='chkChanging']", timeout=30000)
 
                 fecha_pagina = page.input_value("input[name='txtfecha1']")
                 print(f"Fecha que tenía la página: {fecha_pagina}")
 
+                # 2. Borrar la fecha vieja y escribir la de hoy
                 page.fill("input[name='txtfecha1']", "")
                 page.type("input[name='txtfecha1']", hoy)
                 print(f"✓ Fecha corregida a: {hoy}")
 
-                page.wait_for_timeout(500)
+                # --- PAUSA DE 5 SEGUNDOS ---
+                print("Pausa de 5 segundos...")
+                page.wait_for_timeout(5000)
+
+                # 3. Marcar el checkbox "Todos"
                 page.check("input[name='chkChanging']")
                 print("✓ Checkbox 'Todos' marcado")
 
-                page.wait_for_timeout(1500)
+                # --- PAUSA DE 5 SEGUNDOS ---
+                print("Pausa de 5 segundos...")
+                page.wait_for_timeout(5000)
+
+                # 4. Hacer clic en Consultar
                 page.click("button:has-text('Consultar')")
                 print("✓ Consultando, esperando resultados...")
 
+                # 5. Esperar a que la página procese la solicitud y dar 5 segundos finales extra
                 page.wait_for_load_state("networkidle", timeout=60000)
-                page.wait_for_timeout(3000)
+                
+                print("Pausa de 5 segundos finales para procesar la tabla...")
+                page.wait_for_timeout(5000)
 
                 filas = page.query_selector_all("table tr")
                 print(f"Filas encontradas: {len(filas)}")
