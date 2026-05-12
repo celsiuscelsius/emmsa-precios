@@ -16,13 +16,32 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     print("❌ Error: No se encontraron las claves de Supabase.")
     exit(1)
 
+def archivo_ya_existe(supabase, nombre_archivo):
+    """Verifica si el archivo de hoy ya existe en Supabase"""
+    try:
+        archivos = supabase.storage.from_("precios").list()
+        for archivo in archivos:
+            if archivo["name"] == nombre_archivo:
+                print(f"✓ El archivo {nombre_archivo} ya existe en Supabase.")
+                print("No hay datos nuevos todavía. Finalizando sin hacer scraping.")
+                return True
+        return False
+    except Exception as e:
+        print(f"⚠ No se pudo verificar si el archivo existe: {e}")
+        return False  # si hay error, intenta scrapear igual
+
 def scrape_emmsa():
     lima = pytz.timezone("America/Lima")
     ahora = datetime.now(lima)
     hoy = ahora.strftime("%d/%m/%Y")
     nombre_archivo = ahora.strftime("%Y-%m-%d") + ".json"
     print(f"Fecha real de Lima: {hoy}")
-    print(f"Archivo a guardar: {nombre_archivo}")
+    print(f"Archivo objetivo: {nombre_archivo}")
+
+    # Verificar si ya tenemos datos de hoy antes de scrapear
+    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    if archivo_ya_existe(supabase, nombre_archivo):
+        exit(0)  # termina sin error, simplemente no había nada nuevo
 
     MAX_INTENTOS = 3
     productos = []
@@ -96,13 +115,13 @@ def scrape_emmsa():
                 browser.close()
 
             if productos:
-                print(f"✓ {len(productos)} productos extraídos correctamente")
-                break  # salir del loop si todo fue bien
+                print(f"✓ {len(productos)} productos extraídos")
+                break
 
         except Exception as e:
             print(f"⚠ Error en intento {intento}: {e}")
             if intento < MAX_INTENTOS:
-                espera = 30 * intento  # espera 30s, luego 60s
+                espera = 30 * intento
                 print(f"Esperando {espera} segundos antes de reintentar...")
                 time.sleep(espera)
             else:
@@ -110,8 +129,8 @@ def scrape_emmsa():
                 exit(1)
 
     if not productos:
-        print("⚠ No se encontraron productos.")
-        exit(1)
+        print("⚠ No se encontraron productos. EMMSA puede no tener datos aún.")
+        exit(0)  # no es un error, simplemente no hay datos todavía
 
     resultado = {"fecha": hoy, "productos": productos}
 
@@ -120,7 +139,6 @@ def scrape_emmsa():
     print(f"✓ Guardado localmente: {nombre_archivo}")
 
     print("Subiendo a Supabase...")
-    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
     with open(nombre_archivo, "rb") as f:
         supabase.storage.from_("precios").upload(
