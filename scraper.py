@@ -29,6 +29,53 @@ def archivo_ya_existe(supabase, nombre_archivo):
         print(f"⚠ No se pudo verificar si el archivo existe: {e}")
         return False
 
+def parsear_float(texto):
+    """Convierte texto a float de forma segura."""
+    try:
+        return float(texto.strip().replace(",", "."))
+    except:
+        return None
+
+def extraer_productos(filas):
+    """Extrae productos de las filas de la tabla."""
+    productos = []
+    for fila in filas[1:]:
+        celdas = fila.query_selector_all("td")
+        textos = [c.inner_text().strip() for c in celdas]
+
+        if len(celdas) < 4:
+            continue
+        try:
+            nombre   = textos[0]
+            variedad = textos[1]
+            p_min    = parsear_float(textos[2])
+            p_max    = parsear_float(textos[3])
+
+            # Intentar leer promedio oficial de EMMSA (columna 5)
+            # Si no existe o está vacía, calcular como respaldo
+            p_avg = None
+            if len(textos) >= 5 and textos[4] != '':
+                p_avg = parsear_float(textos[4])
+
+            if p_avg is None and p_min is not None and p_max is not None:
+                p_avg = round((p_min + p_max) / 2, 2)
+                print(f"  ℹ Promedio calculado (no oficial) para: {nombre} ({variedad})")
+
+            es_numero = nombre.replace('/', '').replace(' ', '').isdigit()
+
+            if nombre and not es_numero and p_min is not None and p_max is not None:
+                productos.append({
+                    "nombre":   nombre,
+                    "variedad": variedad,
+                    "min":      p_min,
+                    "max":      p_max,
+                    "avg":      p_avg
+                })
+        except Exception as e:
+            print(f"  ⚠ Fila descartada: {e} → {textos}")
+
+    return productos
+
 def scrape_emmsa():
     lima = pytz.timezone("America/Lima")
     ahora = datetime.now(lima)
@@ -65,7 +112,6 @@ def scrape_emmsa():
 
                 print("Esperando 10 segundos para que la web cargue completamente...")
                 page.wait_for_timeout(10000)
-
                 page.wait_for_selector("input[name='chkChanging']", timeout=30000)
 
                 fecha_pagina = page.input_value("input[name='txtfecha1']")
@@ -76,49 +122,27 @@ def scrape_emmsa():
                 print(f"✓ Fecha corregida a: {hoy}")
 
                 page.wait_for_timeout(5000)
-
                 page.check("input[name='chkChanging']")
                 print("✓ Checkbox 'Todos' marcado")
 
                 page.wait_for_timeout(5000)
-
                 page.click("button:has-text('Consultar')")
                 print("✓ Consultando, esperando resultados...")
 
                 page.wait_for_load_state("networkidle", timeout=60000)
-
                 print("Pausa de 5 segundos finales para procesar la tabla...")
                 page.wait_for_timeout(5000)
 
                 filas = page.query_selector_all("table tr")
                 print(f"Filas encontradas: {len(filas)}")
 
-                productos_intento = []
-                for fila in filas[1:]:
+                # Mostrar columnas de la primera fila con datos para diagnóstico
+                for fila in filas[1:3]:
                     celdas = fila.query_selector_all("td")
-                    if len(celdas) >= 4:
-                        try:
-                            nombre     = celdas[0].inner_text().strip()
-                            variedad   = celdas[1].inner_text().strip()
-                            precio_min = float(celdas[2].inner_text().strip().replace(",", "."))
-                            precio_max = float(celdas[3].inner_text().strip().replace(",", "."))
-                            precio_avg = round((precio_min + precio_max) / 2, 2)
+                    if celdas:
+                        print(f"  Columnas detectadas: {[c.inner_text().strip() for c in celdas]}")
 
-                            es_numero = nombre.replace('/', '').replace(' ', '').isdigit()
-
-                            if nombre and not es_numero:
-                                productos_intento.append({
-                                    "nombre":   nombre,
-                                    "variedad": variedad,
-                                    "min":      precio_min,
-                                    "max":      precio_max,
-                                    "avg":      precio_avg
-                                })
-                        except Exception as e:
-                            # Muestra qué fila falló para diagnóstico
-                            textos = [c.inner_text().strip() for c in celdas]
-                            print(f"  ⚠ Fila descartada: {e} → {textos}")
-
+                productos_intento = extraer_productos(filas)
                 browser.close()
 
                 print(f"Productos extraídos en este intento: {len(productos_intento)}")
@@ -155,14 +179,12 @@ def scrape_emmsa():
     print(f"✓ Guardado localmente: {nombre_archivo}")
 
     print("Subiendo a Supabase...")
-
     with open(nombre_archivo, "rb") as f:
         supabase.storage.from_("precios").upload(
             path=nombre_archivo,
             file=f,
             file_options={"content-type": "application/json", "upsert": "true"}
         )
-
     with open(nombre_archivo, "rb") as f:
         supabase.storage.from_("precios").upload(
             path="latest.json",
@@ -172,7 +194,6 @@ def scrape_emmsa():
 
     print(f"✓ Subido como {nombre_archivo} y latest.json")
     print(f"\nURL de hoy: {SUPABASE_URL}/storage/v1/object/public/precios/{nombre_archivo}")
-
     print("\nVista previa (primeros 5):")
     for prod in productos[:5]:
         print(f"  {prod['nombre']} ({prod['variedad']}) → min: {prod['min']} / max: {prod['max']} / prom: {prod['avg']}")
