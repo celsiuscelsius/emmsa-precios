@@ -17,7 +17,6 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     exit(1)
 
 def archivo_ya_existe(supabase, nombre_archivo):
-    """Verifica si el archivo de hoy ya existe en Supabase"""
     try:
         archivos = supabase.storage.from_("precios").list()
         for archivo in archivos:
@@ -28,7 +27,7 @@ def archivo_ya_existe(supabase, nombre_archivo):
         return False
     except Exception as e:
         print(f"⚠ No se pudo verificar si el archivo existe: {e}")
-        return False  # si hay error, intenta scrapear igual
+        return False
 
 def scrape_emmsa():
     lima = pytz.timezone("America/Lima")
@@ -38,10 +37,9 @@ def scrape_emmsa():
     print(f"Fecha real de Lima: {hoy}")
     print(f"Archivo objetivo: {nombre_archivo}")
 
-    # Verificar si ya tenemos datos de hoy antes de scrapear
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
     if archivo_ya_existe(supabase, nombre_archivo):
-        exit(0)  # termina sin error, simplemente no había nada nuevo
+        exit(0)
 
     MAX_INTENTOS = 3
     productos = []
@@ -50,9 +48,8 @@ def scrape_emmsa():
         print(f"\nIntento {intento} de {MAX_INTENTOS}...")
         try:
             with sync_playwright() as p:
-                headless = os.getenv("GITHUB_ACTIONS") == "true"
                 browser = p.chromium.launch(
-                    headless=headless,
+                    headless=True,
                     args=["--no-sandbox", "--disable-setuid-sandbox"]
                 )
                 context = browser.new_context(
@@ -60,14 +57,12 @@ def scrape_emmsa():
                 )
                 page = context.new_page()
 
-                # 1. Entrar a la página
                 page.goto(
                     "https://old.emmsa.com.pe/emmsa_spv/rpEstadistica/rpt_precios-diarios-web.php",
                     timeout=90000,
                     wait_until="domcontentloaded"
                 )
 
-                # --- PAUSA DE 10 SEGUNDOS AL ENTRAR ---
                 print("Esperando 10 segundos para que la web cargue completamente...")
                 page.wait_for_timeout(10000)
 
@@ -76,36 +71,29 @@ def scrape_emmsa():
                 fecha_pagina = page.input_value("input[name='txtfecha1']")
                 print(f"Fecha que tenía la página: {fecha_pagina}")
 
-                # 2. Borrar la fecha vieja y escribir la de hoy
                 page.fill("input[name='txtfecha1']", "")
                 page.type("input[name='txtfecha1']", hoy)
                 print(f"✓ Fecha corregida a: {hoy}")
 
-                # --- PAUSA DE 5 SEGUNDOS ---
-                print("Pausa de 5 segundos...")
                 page.wait_for_timeout(5000)
 
-                # 3. Marcar el checkbox "Todos"
                 page.check("input[name='chkChanging']")
                 print("✓ Checkbox 'Todos' marcado")
 
-                # --- PAUSA DE 5 SEGUNDOS ---
-                print("Pausa de 5 segundos...")
                 page.wait_for_timeout(5000)
 
-                # 4. Hacer clic en Consultar
                 page.click("button:has-text('Consultar')")
                 print("✓ Consultando, esperando resultados...")
 
-                # 5. Esperar a que la página procese la solicitud y dar 5 segundos finales extra
                 page.wait_for_load_state("networkidle", timeout=60000)
-                
+
                 print("Pausa de 5 segundos finales para procesar la tabla...")
                 page.wait_for_timeout(5000)
 
                 filas = page.query_selector_all("table tr")
                 print(f"Filas encontradas: {len(filas)}")
 
+                productos_intento = []
                 for fila in filas[1:]:
                     celdas = fila.query_selector_all("td")
                     if len(celdas) >= 4:
@@ -119,21 +107,32 @@ def scrape_emmsa():
                             es_numero = nombre.replace('/', '').replace(' ', '').isdigit()
 
                             if nombre and not es_numero:
-                                productos.append({
+                                productos_intento.append({
                                     "nombre":   nombre,
                                     "variedad": variedad,
                                     "min":      precio_min,
                                     "max":      precio_max,
                                     "avg":      precio_avg
                                 })
-                        except:
-                            pass
+                        except Exception as e:
+                            # Muestra qué fila falló para diagnóstico
+                            textos = [c.inner_text().strip() for c in celdas]
+                            print(f"  ⚠ Fila descartada: {e} → {textos}")
 
                 browser.close()
 
-            if productos:
-                print(f"✓ {len(productos)} productos extraídos")
-                break
+                print(f"Productos extraídos en este intento: {len(productos_intento)}")
+
+                if productos_intento:
+                    productos = productos_intento
+                    print(f"✓ {len(productos)} productos extraídos correctamente")
+                    break
+                else:
+                    print("⚠ La tabla cargó pero sin productos válidos. EMMSA aún no publicó datos.")
+                    if intento < MAX_INTENTOS:
+                        espera = 30 * intento
+                        print(f"Esperando {espera} segundos antes de reintentar...")
+                        time.sleep(espera)
 
         except Exception as e:
             print(f"⚠ Error en intento {intento}: {e}")
@@ -146,8 +145,8 @@ def scrape_emmsa():
                 exit(1)
 
     if not productos:
-        print("⚠ No se encontraron productos. EMMSA puede no tener datos aún.")
-        exit(0)  # no es un error, simplemente no hay datos todavía
+        print("⚠ No se encontraron productos en ningún intento. EMMSA no tiene datos aún.")
+        exit(0)
 
     resultado = {"fecha": hoy, "productos": productos}
 
