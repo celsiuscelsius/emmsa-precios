@@ -5,6 +5,7 @@ import pytz
 import json
 import os
 import time
+import urllib.request
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,17 +17,19 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     print("❌ Error: No se encontraron las claves de Supabase.")
     exit(1)
 
-def archivo_ya_existe(supabase, nombre_archivo):
+def archivo_ya_existe(nombre_archivo):
+    """
+    Verifica si el archivo existe haciendo un ping directo a su URL pública.
+    NO necesita listar el bucket — compatible con bucket sin política de listado.
+    """
+    url = f"{SUPABASE_URL}/storage/v1/object/public/precios/{nombre_archivo}"
     try:
-        archivos = supabase.storage.from_("precios").list()
-        for archivo in archivos:
-            if archivo["name"] == nombre_archivo:
-                print(f"✓ El archivo {nombre_archivo} ya existe en Supabase.")
-                print("No hay datos nuevos todavía. Finalizando sin hacer scraping.")
-                return True
-        return False
-    except Exception as e:
-        print(f"⚠ No se pudo verificar si el archivo existe: {e}")
+        req = urllib.request.Request(url, method="HEAD")
+        urllib.request.urlopen(req)
+        print(f"✓ El archivo {nombre_archivo} ya existe en Supabase.")
+        print("No hay datos nuevos todavía. Finalizando sin hacer scraping.")
+        return True
+    except:
         return False
 
 def parsear_float(texto):
@@ -37,7 +40,7 @@ def parsear_float(texto):
         return None
 
 def extraer_productos(filas):
-    """Extrae productos de las filas de la tabla."""
+    """Extrae productos de las filas de la tabla con promedio oficial de EMMSA."""
     productos = []
     for fila in filas[1:]:
         celdas = fila.query_selector_all("td")
@@ -51,15 +54,14 @@ def extraer_productos(filas):
             p_min    = parsear_float(textos[2])
             p_max    = parsear_float(textos[3])
 
-            # Intentar leer promedio oficial de EMMSA (columna 5)
-            # Si no existe o está vacía, calcular como respaldo
+            # Promedio oficial de EMMSA (columna 5)
             p_avg = None
             if len(textos) >= 5 and textos[4] != '':
                 p_avg = parsear_float(textos[4])
 
+            # Si no hay promedio oficial, calcular como respaldo
             if p_avg is None and p_min is not None and p_max is not None:
                 p_avg = round((p_min + p_max) / 2, 2)
-                print(f"  ℹ Promedio calculado (no oficial) para: {nombre} ({variedad})")
 
             es_numero = nombre.replace('/', '').replace(' ', '').isdigit()
 
@@ -81,12 +83,15 @@ def scrape_emmsa():
     ahora = datetime.now(lima)
     hoy = ahora.strftime("%d/%m/%Y")
     nombre_archivo = ahora.strftime("%Y-%m-%d") + ".json"
+
     print(f"Fecha real de Lima: {hoy}")
     print(f"Archivo objetivo: {nombre_archivo}")
 
-    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    if archivo_ya_existe(supabase, nombre_archivo):
+    # Verificar si ya tenemos datos de hoy — sin listar el bucket
+    if archivo_ya_existe(nombre_archivo):
         exit(0)
+
+    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
     MAX_INTENTOS = 3
     productos = []
@@ -136,8 +141,8 @@ def scrape_emmsa():
                 filas = page.query_selector_all("table tr")
                 print(f"Filas encontradas: {len(filas)}")
 
-                # Mostrar columnas de la primera fila con datos para diagnóstico
-                for fila in filas[1:3]:
+                # Diagnóstico de columnas
+                for fila in filas[1:2]:
                     celdas = fila.query_selector_all("td")
                     if celdas:
                         print(f"  Columnas detectadas: {[c.inner_text().strip() for c in celdas]}")
@@ -152,7 +157,7 @@ def scrape_emmsa():
                     print(f"✓ {len(productos)} productos extraídos correctamente")
                     break
                 else:
-                    print("⚠ La tabla cargó pero sin productos válidos. EMMSA aún no publicó datos.")
+                    print("⚠ La tabla cargó pero sin productos. EMMSA aún no publicó datos.")
                     if intento < MAX_INTENTOS:
                         espera = 30 * intento
                         print(f"Esperando {espera} segundos antes de reintentar...")
@@ -169,7 +174,7 @@ def scrape_emmsa():
                 exit(1)
 
     if not productos:
-        print("⚠ No se encontraron productos en ningún intento. EMMSA no tiene datos aún.")
+        print("⚠ No se encontraron productos. EMMSA no tiene datos aún.")
         exit(0)
 
     resultado = {"fecha": hoy, "productos": productos}
@@ -193,10 +198,11 @@ def scrape_emmsa():
         )
 
     print(f"✓ Subido como {nombre_archivo} y latest.json")
-    print(f"\nURL de hoy: {SUPABASE_URL}/storage/v1/object/public/precios/{nombre_archivo}")
+    print(f"\nURL: {SUPABASE_URL}/storage/v1/object/public/precios/{nombre_archivo}")
+
     print("\nVista previa (primeros 5):")
     for prod in productos[:5]:
-        print(f"  {prod['nombre']} ({prod['variedad']}) → min: {prod['min']} / max: {prod['max']} / prom: {prod['avg']}")
+        print(f"  {prod['nombre']} ({prod['variedad']}) → min:{prod['min']} / max:{prod['max']} / avg:{prod['avg']}")
 
 if __name__ == "__main__":
     scrape_emmsa()
