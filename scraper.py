@@ -17,28 +17,26 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     print("❌ Error: No se encontraron las claves de Supabase.")
     exit(1)
 
-def archivo_ya_existe(nombre_archivo):
+def archivo_tiene_datos(nombre_archivo):
     """
-    Verifica si el archivo existe haciendo un ping directo a su URL pública.
-    NO necesita listar el bucket — compatible con bucket sin política de listado.
+    Verifica que el archivo exista en Supabase Y tenga productos reales.
+    Retorna True solo si hay al menos 1 producto.
     """
     url = f"{SUPABASE_URL}/storage/v1/object/public/precios/{nombre_archivo}"
     try:
-        req = urllib.request.Request(url, method="HEAD")
-        urllib.request.urlopen(req)
-        return True
+        contenido = urllib.request.urlopen(url).read()
+        datos = json.loads(contenido)
+        return len(datos.get("productos", [])) > 0
     except:
         return False
 
 def parsear_float(texto):
-    """Convierte texto a float de forma segura."""
     try:
         return float(texto.strip().replace(",", "."))
     except:
         return None
 
 def extraer_productos(filas):
-    """Extrae productos de las filas de la tabla con promedio oficial de EMMSA."""
     productos = []
     for fila in filas[1:]:
         celdas = fila.query_selector_all("td")
@@ -52,12 +50,10 @@ def extraer_productos(filas):
             p_min    = parsear_float(textos[2])
             p_max    = parsear_float(textos[3])
 
-            # Promedio oficial de EMMSA (columna 5)
             p_avg = None
             if len(textos) >= 5 and textos[4] != '':
                 p_avg = parsear_float(textos[4])
 
-            # Si no hay promedio oficial, calcular como respaldo
             if p_avg is None and p_min is not None and p_max is not None:
                 p_avg = round((p_min + p_max) / 2, 2)
 
@@ -77,10 +73,6 @@ def extraer_productos(filas):
     return productos
 
 def scrape_fecha(fecha_dt, supabase):
-    """
-    Scrapea EMMSA para una fecha específica y sube el resultado a Supabase.
-    Retorna True si se subieron datos, False si no había datos disponibles.
-    """
     hoy = fecha_dt.strftime("%d/%m/%Y")
     nombre_archivo = fecha_dt.strftime("%Y-%m-%d") + ".json"
 
@@ -88,8 +80,8 @@ def scrape_fecha(fecha_dt, supabase):
     print(f"Scrapeando fecha: {hoy} → {nombre_archivo}")
     print(f"{'='*50}")
 
-    if archivo_ya_existe(nombre_archivo):
-        print(f"✓ El archivo {nombre_archivo} ya existe en Supabase. Saltando.")
+    if archivo_tiene_datos(nombre_archivo):
+        print(f"✓ {nombre_archivo} ya existe con datos reales. Saltando.")
         return True
 
     MAX_INTENTOS = 3
@@ -155,7 +147,7 @@ def scrape_fecha(fecha_dt, supabase):
                     print(f"✓ {len(productos)} productos extraídos correctamente")
                     break
                 else:
-                    print("⚠ La tabla cargó pero sin productos. EMMSA aún no publicó datos para esta fecha.")
+                    print("⚠ Tabla sin productos. EMMSA no publicó datos para esta fecha.")
                     if intento < MAX_INTENTOS:
                         espera = 30 * intento
                         print(f"Esperando {espera} segundos antes de reintentar...")
@@ -169,7 +161,7 @@ def scrape_fecha(fecha_dt, supabase):
                 time.sleep(espera)
 
     if not productos:
-        print(f"⚠ Sin datos disponibles para {hoy}. EMMSA no tiene datos aún.")
+        print(f"⚠ Sin datos reales para {hoy} (domingo, feriado o aún no publicado).")
         return False
 
     resultado = {"fecha": hoy, "productos": productos}
@@ -185,14 +177,7 @@ def scrape_fecha(fecha_dt, supabase):
             file=f,
             file_options={"content-type": "application/json", "upsert": "true"}
         )
-    with open(nombre_archivo, "rb") as f:
-        supabase.storage.from_("precios").upload(
-            path="latest.json",
-            file=f,
-            file_options={"content-type": "application/json", "upsert": "true"}
-        )
-
-    print(f"✓ Subido como {nombre_archivo} y latest.json")
+    print(f"✓ Subido: {nombre_archivo}")
     print(f"URL: {SUPABASE_URL}/storage/v1/object/public/precios/{nombre_archivo}")
 
     print("\nVista previa (primeros 5):")
@@ -203,21 +188,19 @@ def scrape_fecha(fecha_dt, supabase):
 
 def obtener_dias_faltantes(fecha_hoy, max_dias_atras=7):
     """
-    Busca hacia atrás desde ayer hasta max_dias_atras días.
-    Retorna lista de fechas (datetime) que NO existen en Supabase,
-    ordenadas de más antigua a más reciente.
+    Busca desde HOY hacia atrás 7 días.
+    Solo marca como faltante si NO tiene datos reales (ignora JSONs vacíos).
     """
     faltantes = []
-    for i in range(1, max_dias_atras + 1):
+    for i in range(0, max_dias_atras):
         fecha = fecha_hoy - timedelta(days=i)
         nombre_archivo = fecha.strftime("%Y-%m-%d") + ".json"
-        if archivo_ya_existe(nombre_archivo):
-            print(f"✓ Archivo existente: {nombre_archivo} (hace {i} día(s))")
+        if archivo_tiene_datos(nombre_archivo):
+            print(f"✓ Con datos reales: {nombre_archivo} (hace {i} día(s))")
         else:
-            print(f"⚠ Falta archivo: {nombre_archivo} (hace {i} día(s))")
+            print(f"⚠ Sin datos reales: {nombre_archivo} (hace {i} día(s))")
             faltantes.append(fecha)
 
-    # Ordenar de más antigua a más reciente
     faltantes.reverse()
     return faltantes
 
@@ -229,28 +212,37 @@ def scrape_emmsa():
 
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-    # ── PASO 1: Recuperar días faltantes (domingos, feriados, días caídos) ──
-    print("\n🔍 Buscando días faltantes en los últimos 7 días...")
+    print("\n🔍 Verificando días con datos reales (hoy + últimos 6 días)...")
     dias_faltantes = obtener_dias_faltantes(ahora, max_dias_atras=7)
 
     if dias_faltantes:
-        print(f"\n📅 Se encontraron {len(dias_faltantes)} día(s) faltante(s). Recuperando...")
+        print(f"\n📅 {len(dias_faltantes)} día(s) sin datos reales. Intentando scrapear...")
         for fecha_faltante in dias_faltantes:
             exito = scrape_fecha(fecha_faltante, supabase)
             if not exito:
-                print(f"  ⚠ Sin datos disponibles aún para {fecha_faltante.strftime('%d/%m/%Y')} — puede ser normal si EMMSA no los publicó.")
-            # Pausa entre fechas para no saturar la web
+                print(f"  ⚠ {fecha_faltante.strftime('%d/%m/%Y')} no tiene datos (domingo/feriado/no publicado).")
             time.sleep(10)
     else:
-        print("✓ No hay días faltantes en los últimos 7 días.")
+        print("✓ Todos los días tienen datos reales.")
 
-    # ── PASO 2: Scrapear el día de hoy ──
-    print(f"\n📅 Scrapeando el día de hoy...")
-    exito_hoy = scrape_fecha(ahora, supabase)
-
-    if not exito_hoy:
-        print("\n⚠ No se encontraron datos para hoy. EMMSA no los ha publicado aún.")
-        exit(0)
+    # ── SIEMPRE actualizar latest.json con el día más reciente que tenga datos ──
+    print("\n📌 Actualizando latest.json con la fecha más reciente con datos reales...")
+    for i in range(0, 7):
+        fecha_candidata = ahora - timedelta(days=i)
+        nombre_candidato = fecha_candidata.strftime("%Y-%m-%d") + ".json"
+        if archivo_tiene_datos(nombre_candidato):
+            print(f"✓ Fecha más reciente con datos: {nombre_candidato}")
+            url = f"{SUPABASE_URL}/storage/v1/object/public/precios/{nombre_candidato}"
+            contenido = urllib.request.urlopen(url).read()
+            supabase.storage.from_("precios").upload(
+                path="latest.json",
+                file=contenido,
+                file_options={"content-type": "application/json", "upsert": "true"}
+            )
+            print(f"✓ latest.json actualizado con datos de: {fecha_candidata.strftime('%d/%m/%Y')}")
+            break
+    else:
+        print("⚠ No se encontró ningún día con datos reales en los últimos 7 días.")
 
     print("\n✅ Proceso completado.")
 
