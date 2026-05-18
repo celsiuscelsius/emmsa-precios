@@ -1,6 +1,6 @@
 name: Scraper EMMSA Diario
 on:
-repository_dispatch:
+  repository_dispatch:
     types: [cron-job-trigger]
   schedule:
     - cron: '0 7 * * *'     # 02:00 AM Lima (UTC-5)
